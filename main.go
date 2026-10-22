@@ -6,13 +6,29 @@ import (
 	"log"
 	"net"
 	"os"
+	"path/filepath"
 	"strings"
 )
 
-func send(addr, fileName string) error {
-	file, err := os.Open(fileName)
+func makeDirAbs(dir string) (string, error) {
+	if err := error(nil); strings.Index(dir, ".") == 0 || strings.Index(dir, string(os.PathSeparator)) != 0 {
+		dir, err = filepath.Abs(dir)
+		if err != nil {
+			return "", err
+		}
+	}
+	return dir, nil
+}
+
+func send(addr, dirToFile string) error {
+	dirToFile, err := makeDirAbs(dirToFile)
 	if err != nil {
-		return nil
+		return err
+	}
+
+	file, err := os.Open(dirToFile)
+	if err != nil {
+		return err
 	}
 	defer file.Close()
 
@@ -29,20 +45,25 @@ func send(addr, fileName string) error {
 	return nil
 }
 
-func receive(addr, fileName string) error {
-	listenr, err := net.Listen("tcp", addr)
+func receive(addr, dirToFile string) error {
+	listener, err := net.Listen("tcp", addr)
 	if err != nil {
 		return err
 	}
-	defer listenr.Close()
+	defer listener.Close()
 
-	conn, err := listenr.Accept()
+	conn, err := listener.Accept()
 	if err != nil {
 		return err
 	}
 	defer conn.Close()
 
-	file, err := os.Create(fileName)
+	dirToFile, err = makeDirAbs(dirToFile)
+	if err != nil {
+		return err
+	}
+
+	file, err := os.OpenFile(dirToFile, os.O_CREATE|os.O_RDWR|os.O_APPEND, 0644)
 	if err != nil {
 		return err
 	}
@@ -61,7 +82,7 @@ func receive(addr, fileName string) error {
 
 func main() {
 	if len(os.Args) < 4 {
-		log.Fatal("not enogh args\nUsage send|receive, ipaddr, name of file. File must be near running program|will create near running program")
+		log.Fatal("not enogh args\nUsage send|receive, ipaddr, name of file. File can be asbsolute or relative path")
 	}
 	if strings.ToLower(os.Args[1]) == "send" {
 		fmt.Println("starting to connect and sening")
@@ -75,5 +96,4 @@ func main() {
 	} else {
 		log.Fatal("unknown command")
 	}
-
 }
