@@ -68,12 +68,20 @@ func receive(addr, dirToFile string) error {
 		return err
 	}
 	defer conn.Close()
+	fmt.Printf("some device wants to connect, IP: %s, accept ? [y/N]: ", conn.RemoteAddr())
+	answer := ""
+	fmt.Scan(&answer)
+	switch strings.ToLower(answer) {
+	case "y":
+	default:
+		return fmt.Errorf("access denied for device IP: %s", conn.RemoteAddr())
+	}
+
 	fmt.Println("connected")
 
 	flagsToWrite := os.O_CREATE | os.O_RDWR
 	if _, err = os.Stat(dirToFile); err != nil {
-		fmt.Printf("Append data to file %q ? [Y/n]", dirToFile)
-		answer := ""
+		fmt.Printf("append data to file %q ? [Y/n]: ", dirToFile)
 		fmt.Scan(&answer)
 		switch strings.ToLower(answer) {
 		case "n":
