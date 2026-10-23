@@ -34,7 +34,7 @@ func send(addr, dirToFile string) error {
 	defer conn.Close()
 
 	fmt.Println("connected")
-	file, err := os.Open(dirToFile)
+	file, err := os.OpenFile(dirToFile, os.O_RDONLY, 0644)
 	if err != nil {
 		return err
 	}
@@ -70,7 +70,19 @@ func receive(addr, dirToFile string) error {
 	defer conn.Close()
 	fmt.Println("connected")
 
-	file, err := os.OpenFile(dirToFile, os.O_CREATE|os.O_RDWR|os.O_APPEND, 0644)
+	flagsToWrite := os.O_CREATE | os.O_RDWR
+	if _, err = os.Stat(dirToFile); err != nil {
+		fmt.Printf("Append data to file %q ? [Y/n]", dirToFile)
+		answer := ""
+		fmt.Scan(&answer)
+		switch strings.ToLower(answer) {
+		case "n":
+		default:
+			flagsToWrite |= os.O_APPEND
+		}
+	}
+
+	file, err := os.OpenFile(dirToFile, flagsToWrite, 0644)
 	if err != nil {
 		return err
 	}
