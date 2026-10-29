@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bufio"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -18,25 +19,41 @@ type FileInfo struct {
 }
 
 func makeCopyFile(name string, number int) string {
-	baseName := name[0:strings.LastIndex(name, ".")]
-	nameExt := filepath.Ext(name)
-	return fmt.Sprintf("%s_COPY_%d%s", baseName, number, nameExt)
+	ext := filepath.Ext(name)
+	base := strings.TrimPrefix(name, ext)
+	return fmt.Sprintf("%s_COPY_%d%s", base, number, ext)
 }
 
 func getInfo(file string) (*FileInfo, error) {
 	info, err := os.Stat(file)
 	if err != nil {
-		return &FileInfo{}, err
+		return nil, err
 	}
 	return &FileInfo{Name: info.Name(), Size: uint64(info.Size())}, nil
 }
 
+func readConn(r *bufio.Reader) (string, error) {
+	line, err := r.ReadString('\n')
+	if err != nil {
+		return "", err
+	}
+	return strings.TrimRight(line, "\n"), nil
+}
+
+func writeConn(w *bufio.Writer, line string) error {
+	if _, err := w.WriteString(line + "\n"); err != nil {
+		return err
+	}
+	return w.Flush()
+}
+
 func makeDirAbs(dir string) (string, error) {
-	if err := error(nil); strings.Index(dir, ".") == 0 || strings.Index(dir, string(os.PathSeparator)) != 0 {
-		dir, err = filepath.Abs(dir)
+	if !filepath.IsAbs(dir) {
+		abs, err := filepath.Abs(dir)
 		if err != nil {
 			return "", err
 		}
+		return abs, nil
 	}
 	return dir, nil
 }
@@ -53,14 +70,10 @@ func send(addr, dirToFile string) error {
 		return err
 	}
 	defer conn.Close()
+	rw := bufio.NewReadWriter(bufio.NewReader(conn), bufio.NewWriter(conn))
 
 	fmt.Println()
-	resp := make([]byte, 2)
-	_, err = conn.Read(resp)
-	if err != nil {
-		return err
-	}
-	if strings.ToLower(string(resp)) != "ok" {
+	if resp, err := readConn(rw.Reader); resp != "ok" || err != nil {
 		fmt.Println()
 		return fmt.Errorf("access denied")
 	}
@@ -74,22 +87,15 @@ func send(addr, dirToFile string) error {
 	if err != nil {
 		return err
 	}
-	_, err = conn.Write(jsonData)
+	err = writeConn(rw.Writer, string(jsonData))
 	if err != nil {
 		return err
 	}
-	for {
-		_, err = conn.Read(resp)
-		if err != nil {
-			return err
-		}
-		if strings.ToLower(string(resp)) == "ok" {
-			break
-		} else {
-			return fmt.Errorf("another device denied")
-		}
+	if resp, err := readConn(rw.Reader); resp != "ok" || err != nil {
+		return fmt.Errorf("another device denied")
 	}
-	file, err := os.OpenFile(dirToFile, os.O_RDONLY, 0644)
+
+	file, err := os.OpenFile(dirToFile, os.O_RDONLY, 0o644)
 	if err != nil {
 		return err
 	}
@@ -127,35 +133,32 @@ func receive(addr, dirToFile string) error {
 	fmt.Printf("some device wants to connect, IP: %s, accept ? [y/N]: ", conn.RemoteAddr())
 	answer := ""
 	fmt.Scan(&answer)
+	rw := bufio.NewReadWriter(bufio.NewReader(conn), bufio.NewWriter(conn))
 	switch strings.ToLower(answer) {
 	case "y":
-		conn.Write([]byte("OK"))
+		writeConn(rw.Writer, "ok")
 	default:
-		conn.Write([]byte("NO"))
+		writeConn(rw.Writer, "no")
 		return fmt.Errorf("access denied for device IP: %s", conn.RemoteAddr())
 	}
 
 	fmt.Println("connected")
-	jsonData := make([]byte, 30)
 	info := FileInfo{}
-	for {
-		_, err = conn.Read(jsonData)
-		if err != nil {
-			conn.Write([]byte("NO"))
-			return err
-		}
-		err = json.Unmarshal(jsonData, &info)
-		if err != nil {
-			conn.Write([]byte("NO"))
-			return err
-		}
-		if info == (FileInfo{Name: "", Size: uint64(0)}) {
-			conn.Write([]byte("NO"))
-			return fmt.Errorf("empty data")
-		} else {
-			conn.Write([]byte("OK"))
-			break
-		}
+	jsonData, err := readConn(rw.Reader)
+	if err != nil {
+		writeConn(rw.Writer, "no")
+		return err
+	}
+	err = json.Unmarshal([]byte(jsonData), &info)
+	if err != nil {
+		writeConn(rw.Writer, "no")
+		return err
+	}
+	if info == (FileInfo{Name: "", Size: uint64(0)}) {
+		conn.Write([]byte("no"))
+		return fmt.Errorf("empty data")
+	} else {
+		conn.Write([]byte("ok"))
 	}
 
 	fileName := filepath.Base(dirToFile)
@@ -212,7 +215,7 @@ func receive(addr, dirToFile string) error {
 		}
 	}
 
-	file, err := os.OpenFile(dirToFile, flagsToWrite, 0644)
+	file, err := os.OpenFile(dirToFile, flagsToWrite, 0o644)
 	if err != nil {
 		return err
 	}
