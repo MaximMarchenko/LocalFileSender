@@ -20,7 +20,7 @@ type FileInfo struct {
 
 func makeCopyFile(name string, number int) string {
 	ext := filepath.Ext(name)
-	base := strings.TrimPrefix(name, ext)
+	base := strings.TrimSuffix(name, ext)
 	return fmt.Sprintf("%s_COPY_%d%s", base, number, ext)
 }
 
@@ -154,13 +154,11 @@ func receive(addr, dirToFile string) error {
 		writeConn(rw.Writer, "no")
 		return err
 	}
-	if info == (FileInfo{Name: "", Size: uint64(0)}) {
-		writeConn(rw.Writer, "no")
+	if info.Size == uint64(0) || info.Name == "" {
 		return fmt.Errorf("empty data")
 	} else {
 		writeConn(rw.Writer, "ok")
 	}
-
 	fileName := filepath.Base(dirToFile)
 	if info.Name != fileName {
 		fmt.Printf("choose which file to write, %q or %q ? [1/2]:", fileName, info.Name)
