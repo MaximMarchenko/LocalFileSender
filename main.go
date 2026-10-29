@@ -155,15 +155,15 @@ func receive(addr, dirToFile string) error {
 		return err
 	}
 	if info == (FileInfo{Name: "", Size: uint64(0)}) {
-		conn.Write([]byte("no"))
+		writeConn(rw.Writer, "no")
 		return fmt.Errorf("empty data")
 	} else {
-		conn.Write([]byte("ok"))
+		writeConn(rw.Writer, "ok")
 	}
 
 	fileName := filepath.Base(dirToFile)
 	if info.Name != fileName {
-		fmt.Printf("choose which file to write, %q %q ? [1/2]", fileName, info.Name)
+		fmt.Printf("choose which file to write, %q or %q ? [1/2]:", fileName, info.Name)
 		fmt.Scan(&answer)
 		num, _ := strconv.Atoi(answer)
 		switch num {
