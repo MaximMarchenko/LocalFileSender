@@ -3,6 +3,7 @@ package main
 import (
 	"bufio"
 	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -12,6 +13,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"time"
 )
 
 const (
@@ -112,11 +114,20 @@ func send(addr, dirToFile string) error {
 	fmt.Print("starting to send file")
 
 	for {
-		if _, err := io.Copy(conn, file); err != nil {
+		hash.Reset()
+		file.Seek(0, io.SeekStart)
+		if _, err := io.Copy(io.MultiWriter(conn, hash), file); err != nil {
 			return err
 		}
-		writeConn(rw.Writer, msgCheckSum)
-		writeConn(rw.Writer, string(hash.Sum(nil)))
+		for {
+			writeConn(rw.Writer, msgCheckSum)
+			if resp, _ := readConn(rw.Reader); resp != msgOk {
+				time.Sleep(50 * time.Millisecond)
+			} else {
+				break
+			}
+		}
+		writeConn(rw.Writer, hex.EncodeToString(hash.Sum(nil)))
 		if resp, _ := readConn(rw.Reader); resp != msgAgain {
 			break
 		}
@@ -239,17 +250,23 @@ func receive(addr, dirToFile string) error {
 	fmt.Print("writing data into file...")
 
 	for {
-		if _, err := io.Copy(io.MultiWriter(hash, file), conn); err != nil {
+		hash.Reset()
+		file.Truncate(0)
+		file.Seek(0, io.SeekStart)
+		if _, err := io.CopyN(io.MultiWriter(hash, file), conn, int64(info.Size)); err != nil {
 			return err
 		}
 		if req, _ := readConn(rw.Reader); req != msgCheckSum {
 			return fmt.Errorf("unknown request")
+		} else {
+			writeConn(rw.Writer, msgOk)
 		}
 		senderHash, err := readConn(rw.Reader)
 		if err != nil {
 			return err
 		}
-		if senderHash == string(hash.Sum(nil)) {
+		if senderHash == hex.EncodeToString(hash.Sum(nil)) {
+			writeConn(rw.Writer, msgOk)
 			break
 		} else {
 			writeConn(rw.Writer, msgAgain)
