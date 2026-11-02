@@ -231,16 +231,6 @@ func receive(addr, dirToFile string) error {
 	}
 
 	flagsToWrite := os.O_CREATE | os.O_RDWR
-	// if _, err = os.Stat(dirToFile); err == nil {
-	// 	fmt.Printf("append data to file %q ? [Y/n]: ", dirToFile)
-	// 	fmt.Scan(&answer)
-	// 	switch strings.ToLower(answer) {
-	// 	case "n":
-	// 	default:
-	// 		flagsToWrite |= os.O_APPEND
-	// 	}
-	// }
-
 	hash := sha256.New()
 	file, err := os.OpenFile(dirToFile, flagsToWrite, 0o644)
 	if err != nil {
