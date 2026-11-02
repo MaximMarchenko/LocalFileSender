@@ -2,6 +2,8 @@ package main
 
 import (
 	"bufio"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -11,6 +13,14 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"time"
+)
+
+const (
+	msgOk       = "OK"
+	msgFail     = "FAIL"
+	msgAgain    = "AGAIN"
+	msgCheckSum = "CHECKSUM"
 )
 
 type FileInfo struct {
@@ -73,7 +83,7 @@ func send(addr, dirToFile string) error {
 	rw := bufio.NewReadWriter(bufio.NewReader(conn), bufio.NewWriter(conn))
 
 	fmt.Println()
-	if resp, err := readConn(rw.Reader); resp != "ok" || err != nil {
+	if resp, err := readConn(rw.Reader); resp != msgOk || err != nil {
 		fmt.Println()
 		return fmt.Errorf("access denied")
 	}
@@ -91,10 +101,11 @@ func send(addr, dirToFile string) error {
 	if err != nil {
 		return err
 	}
-	if resp, err := readConn(rw.Reader); resp != "ok" || err != nil {
+	if resp, err := readConn(rw.Reader); resp != msgOk || err != nil {
 		return fmt.Errorf("another device denied")
 	}
 
+	hash := sha256.New()
 	file, err := os.OpenFile(dirToFile, os.O_RDONLY, 0o644)
 	if err != nil {
 		return err
@@ -102,8 +113,24 @@ func send(addr, dirToFile string) error {
 	defer file.Close()
 	fmt.Print("starting to send file")
 
-	if _, err := io.Copy(conn, file); err != nil {
-		return err
+	for {
+		hash.Reset()
+		file.Seek(0, io.SeekStart)
+		if _, err := io.Copy(io.MultiWriter(conn, hash), file); err != nil {
+			return err
+		}
+		for {
+			writeConn(rw.Writer, msgCheckSum)
+			if resp, _ := readConn(rw.Reader); resp != msgOk {
+				time.Sleep(50 * time.Millisecond)
+			} else {
+				break
+			}
+		}
+		writeConn(rw.Writer, hex.EncodeToString(hash.Sum(nil)))
+		if resp, _ := readConn(rw.Reader); resp != msgAgain {
+			break
+		}
 	}
 	fmt.Println()
 	fmt.Println("sent file successfully")
@@ -136,9 +163,9 @@ func receive(addr, dirToFile string) error {
 	rw := bufio.NewReadWriter(bufio.NewReader(conn), bufio.NewWriter(conn))
 	switch strings.ToLower(answer) {
 	case "y":
-		writeConn(rw.Writer, "ok")
+		writeConn(rw.Writer, msgOk)
 	default:
-		writeConn(rw.Writer, "no")
+		writeConn(rw.Writer, msgFail)
 		return fmt.Errorf("access denied for device IP: %s", conn.RemoteAddr())
 	}
 
@@ -146,18 +173,18 @@ func receive(addr, dirToFile string) error {
 	info := FileInfo{}
 	jsonData, err := readConn(rw.Reader)
 	if err != nil {
-		writeConn(rw.Writer, "no")
+		writeConn(rw.Writer, msgFail)
 		return err
 	}
 	err = json.Unmarshal([]byte(jsonData), &info)
 	if err != nil {
-		writeConn(rw.Writer, "no")
+		writeConn(rw.Writer, msgFail)
 		return err
 	}
 	if info.Size == uint64(0) || info.Name == "" {
 		return fmt.Errorf("empty data")
 	} else {
-		writeConn(rw.Writer, "ok")
+		writeConn(rw.Writer, msgOk)
 	}
 	fileName := filepath.Base(dirToFile)
 	if info.Name != fileName {
@@ -186,7 +213,8 @@ func receive(addr, dirToFile string) error {
 		return err
 	}
 	copies := make([]string, 0)
-	nameFile := info.Name[0:strings.LastIndex(info.Name, ".")]
+	ext := filepath.Ext(info.Name)
+	nameFile := strings.TrimSuffix(info.Name, ext)
 	for _, en := range entries {
 		if en.IsDir() {
 			continue
@@ -203,16 +231,7 @@ func receive(addr, dirToFile string) error {
 	}
 
 	flagsToWrite := os.O_CREATE | os.O_RDWR
-	if _, err = os.Stat(dirToFile); err == nil {
-		fmt.Printf("append data to file %q ? [Y/n]: ", dirToFile)
-		fmt.Scan(&answer)
-		switch strings.ToLower(answer) {
-		case "n":
-		default:
-			flagsToWrite |= os.O_APPEND
-		}
-	}
-
+	hash := sha256.New()
 	file, err := os.OpenFile(dirToFile, flagsToWrite, 0o644)
 	if err != nil {
 		return err
@@ -220,8 +239,31 @@ func receive(addr, dirToFile string) error {
 	defer file.Close()
 	fmt.Print("writing data into file...")
 
-	if _, err := io.Copy(file, conn); err != nil {
-		return err
+	for {
+		hash.Reset()
+		file.Truncate(0)
+		file.Seek(0, io.SeekStart)
+		if _, err := io.CopyN(io.MultiWriter(hash, file), conn, int64(info.Size)); err != nil {
+			return err
+		}
+		if req, _ := readConn(rw.Reader); req != msgCheckSum {
+			return fmt.Errorf("unknown request")
+		} else {
+			writeConn(rw.Writer, msgOk)
+		}
+		senderHash, err := readConn(rw.Reader)
+		if err != nil {
+			return err
+		}
+		if senderHash == hex.EncodeToString(hash.Sum(nil)) {
+			writeConn(rw.Writer, msgOk)
+			break
+		} else {
+			writeConn(rw.Writer, msgAgain)
+			file.Close()
+			file, _ = os.OpenFile(dirToFile, flagsToWrite, 0o644)
+		}
+
 	}
 
 	if err := file.Sync(); err != nil {
