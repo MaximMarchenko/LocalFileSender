@@ -4,7 +4,6 @@ import (
 	"bufio"
 	"crypto/sha256"
 	"encoding/hex"
-	"encoding/json"
 	"fmt"
 	"io"
 	"net"
@@ -14,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/MaximMarchenko/LocalFileSender/internal/json"
 	"github.com/MaximMarchenko/LocalFileSender/internal/manifest"
 )
 
@@ -147,13 +147,12 @@ func Receive(addr, dirToFile string) error {
 	}
 
 	fmt.Println("connected")
-	m := &manifest.Manifest{}
 	jsonData, err := readConn(rw.Reader)
 	if err != nil {
 		writeConn(rw.Writer, msgFail)
 		return err
 	}
-	err = json.Unmarshal([]byte(jsonData), m)
+	m, err := json.Unmarshal([]byte(jsonData))
 	if err != nil {
 		writeConn(rw.Writer, msgFail)
 		return err
@@ -220,7 +219,7 @@ func Receive(addr, dirToFile string) error {
 		hash.Reset()
 		file.Truncate(0)
 		file.Seek(0, io.SeekStart)
-		if _, err := io.CopyN(io.MultiWriter(hash, file), conn, int64(m.Size)); err != nil {
+		if _, err := io.CopyN(io.MultiWriter(hash, file), conn, m.Size); err != nil {
 			return err
 		}
 		if req, _ := readConn(rw.Reader); req != msgCheckSum {

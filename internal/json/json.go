@@ -6,12 +6,13 @@ import (
 	"github.com/MaximMarchenko/LocalFileSender/internal/manifest"
 )
 
-func Unmarshal(data []byte, m *manifest.Manifest) error {
+func Unmarshal(data []byte) (*manifest.Manifest, error) {
+	m := &manifest.Manifest{}
 	err := json.Unmarshal(data, m)
 	if err != nil {
-		return err
+		return nil, err
 	}
-	return nil
+	return m, nil
 }
 
 func Marshal(m *manifest.Manifest) ([]byte, error) {

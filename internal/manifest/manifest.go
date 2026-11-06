@@ -7,7 +7,7 @@ import (
 
 type Manifest struct {
 	Name    string      `json:"name"`
-	Size    uint32      `json:"size"`
+	Size    int64       `json:"size"`
 	IsDir   bool        `json:"isdir,omitempty"`
 	Entries []*Manifest `json:"entries,omitempty"`
 }
@@ -33,7 +33,7 @@ func Build(path string) (*Manifest, error) {
 		return nil, err
 	}
 	var manifest []*Manifest
-	var name, size, isDir = "", uint32(0), false
+	var name, size, isDir = "", int64(0), false
 	if info.IsDir() {
 		var entries []os.DirEntry
 		name, isDir = info.Name(), info.IsDir()
@@ -42,14 +42,14 @@ func Build(path string) (*Manifest, error) {
 			return nil, err
 		}
 		for _, en := range entries {
-			m, err := Build(en.Name())
+			m, err := Build(filepath.Join(en.Name()))
 			if err != nil {
 				return nil, err
 			}
 			manifest = append(manifest, m)
 		}
 	} else {
-		name, size = info.Name(), uint32(info.Size())
+		name, size = info.Name(), info.Size()
 	}
 	return &Manifest{
 		Name:    name,
