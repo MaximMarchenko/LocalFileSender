@@ -1,0 +1,275 @@
+package transfer
+
+import (
+	"bufio"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
+	"fmt"
+	"io"
+	"net"
+	"os"
+	"path/filepath"
+	"strconv"
+	"strings"
+	"time"
+)
+
+const (
+	msgOk       = "OK"
+	msgFail     = "FAIL"
+	msgAgain    = "AGAIN"
+	msgCheckSum = "CHECKSUM"
+)
+
+type FileInfo struct {
+	Name string `json:"name"`
+	Size uint64 `json:"size"`
+}
+
+func makeCopyFile(name string, number int) string {
+	ext := filepath.Ext(name)
+	base := strings.TrimSuffix(name, ext)
+	return fmt.Sprintf("%s_COPY_%d%s", base, number, ext)
+}
+
+func getInfo(file string) (*FileInfo, error) {
+	info, err := os.Stat(file)
+	if err != nil {
+		return nil, err
+	}
+	return &FileInfo{Name: info.Name(), Size: uint64(info.Size())}, nil
+}
+
+func readConn(r *bufio.Reader) (string, error) {
+	line, err := r.ReadString('\n')
+	if err != nil {
+		return "", err
+	}
+	return strings.TrimRight(line, "\n"), nil
+}
+
+func writeConn(w *bufio.Writer, line string) error {
+	if _, err := w.WriteString(line + "\n"); err != nil {
+		return err
+	}
+	return w.Flush()
+}
+
+func makeDirAbs(dir string) (string, error) {
+	if !filepath.IsAbs(dir) {
+		abs, err := filepath.Abs(dir)
+		if err != nil {
+			return "", err
+		}
+		return abs, nil
+	}
+	return dir, nil
+}
+
+func Send(addr, dirToFile string) error {
+	dirToFile, err := makeDirAbs(dirToFile)
+	if err != nil {
+		return err
+	}
+
+	fmt.Print("waiting for connection...")
+	conn, err := net.Dial("tcp", addr)
+	if err != nil {
+		return err
+	}
+	defer conn.Close()
+	rw := bufio.NewReadWriter(bufio.NewReader(conn), bufio.NewWriter(conn))
+
+	fmt.Println()
+	if resp, err := readConn(rw.Reader); resp != msgOk || err != nil {
+		fmt.Println()
+		return fmt.Errorf("access denied")
+	}
+
+	fmt.Println("connected")
+	info, err := getInfo(dirToFile)
+	if err != nil {
+		return err
+	}
+	jsonData, err := json.Marshal(info)
+	if err != nil {
+		return err
+	}
+	err = writeConn(rw.Writer, string(jsonData))
+	if err != nil {
+		return err
+	}
+	if resp, err := readConn(rw.Reader); resp != msgOk || err != nil {
+		return fmt.Errorf("another device denied")
+	}
+
+	hash := sha256.New()
+	file, err := os.OpenFile(dirToFile, os.O_RDONLY, 0o644)
+	if err != nil {
+		return err
+	}
+	defer file.Close()
+	fmt.Print("starting to send file")
+
+	for {
+		hash.Reset()
+		file.Seek(0, io.SeekStart)
+		if _, err := io.Copy(io.MultiWriter(conn, hash), file); err != nil {
+			return err
+		}
+		for {
+			writeConn(rw.Writer, msgCheckSum)
+			if resp, _ := readConn(rw.Reader); resp != msgOk {
+				time.Sleep(50 * time.Millisecond)
+			} else {
+				break
+			}
+		}
+		writeConn(rw.Writer, hex.EncodeToString(hash.Sum(nil)))
+		if resp, _ := readConn(rw.Reader); resp != msgAgain {
+			break
+		}
+	}
+	fmt.Println()
+	fmt.Println("sent file successfully")
+
+	return nil
+}
+
+func Receive(addr, dirToFile string) error {
+	dirToFile, err := makeDirAbs(dirToFile)
+	if err != nil {
+		return err
+	}
+
+	fmt.Print("waiting for connection...")
+	listener, err := net.Listen("tcp", addr)
+	if err != nil {
+		return err
+	}
+	defer listener.Close()
+
+	conn, err := listener.Accept()
+	if err != nil {
+		return err
+	}
+	defer conn.Close()
+	fmt.Println()
+	fmt.Printf("some device wants to connect, IP: %s, accept ? [y/N]: ", conn.RemoteAddr())
+	answer := ""
+	fmt.Scan(&answer)
+	rw := bufio.NewReadWriter(bufio.NewReader(conn), bufio.NewWriter(conn))
+	switch strings.ToLower(answer) {
+	case "y":
+		writeConn(rw.Writer, msgOk)
+	default:
+		writeConn(rw.Writer, msgFail)
+		return fmt.Errorf("access denied for device IP: %s", conn.RemoteAddr())
+	}
+
+	fmt.Println("connected")
+	info := FileInfo{}
+	jsonData, err := readConn(rw.Reader)
+	if err != nil {
+		writeConn(rw.Writer, msgFail)
+		return err
+	}
+	err = json.Unmarshal([]byte(jsonData), &info)
+	if err != nil {
+		writeConn(rw.Writer, msgFail)
+		return err
+	}
+	if info.Size == uint64(0) || info.Name == "" {
+		return fmt.Errorf("empty data")
+	} else {
+		writeConn(rw.Writer, msgOk)
+	}
+	fileName := filepath.Base(dirToFile)
+	if info.Name != fileName {
+		fmt.Printf("choose which file to write, %q or %q ? [1/2]:", fileName, info.Name)
+		fmt.Scan(&answer)
+		num, _ := strconv.Atoi(answer)
+		switch num {
+		case 1:
+		case 2:
+			dirToFile, err = makeDirAbs(info.Name)
+			if err != nil {
+				return err
+			}
+		default:
+			fmt.Println()
+			fmt.Println("answer out of range")
+		}
+	}
+
+	dir, err := makeDirAbs(".")
+	if err != nil {
+		return err
+	}
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return err
+	}
+	copies := make([]string, 0)
+	ext := filepath.Ext(info.Name)
+	nameFile := strings.TrimSuffix(info.Name, ext)
+	for _, en := range entries {
+		if en.IsDir() {
+			continue
+		}
+		if strings.Contains(en.Name(), nameFile) && en.Name()[0] == info.Name[0] && filepath.Ext(nameFile) == filepath.Ext(en.Name()) {
+			copies = append(copies, en.Name())
+		}
+	}
+	if len(copies) > 0 {
+		dirToFile, err = makeDirAbs(makeCopyFile(info.Name, len(copies)))
+		if err != nil {
+			return err
+		}
+	}
+
+	flagsToWrite := os.O_CREATE | os.O_RDWR
+	hash := sha256.New()
+	file, err := os.OpenFile(dirToFile, flagsToWrite, 0o644)
+	if err != nil {
+		return err
+	}
+	defer file.Close()
+	fmt.Print("writing data into file...")
+
+	for {
+		hash.Reset()
+		file.Truncate(0)
+		file.Seek(0, io.SeekStart)
+		if _, err := io.CopyN(io.MultiWriter(hash, file), conn, int64(info.Size)); err != nil {
+			return err
+		}
+		if req, _ := readConn(rw.Reader); req != msgCheckSum {
+			return fmt.Errorf("unknown request")
+		} else {
+			writeConn(rw.Writer, msgOk)
+		}
+		senderHash, err := readConn(rw.Reader)
+		if err != nil {
+			return err
+		}
+		if senderHash == hex.EncodeToString(hash.Sum(nil)) {
+			writeConn(rw.Writer, msgOk)
+			break
+		} else {
+			writeConn(rw.Writer, msgAgain)
+			file.Close()
+			file, _ = os.OpenFile(dirToFile, flagsToWrite, 0o644)
+		}
+
+	}
+
+	if err := file.Sync(); err != nil {
+		return err
+	}
+	fmt.Println()
+	fmt.Println("received file successfully")
+
+	return nil
+}
