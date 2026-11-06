@@ -13,6 +13,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/MaximMarchenko/LocalFileSender/internal/manifest"
 )
 
 const (
@@ -22,23 +24,10 @@ const (
 	msgCheckSum = "CHECKSUM"
 )
 
-type FileInfo struct {
-	Name string `json:"name"`
-	Size uint64 `json:"size"`
-}
-
 func makeCopyFile(name string, number int) string {
 	ext := filepath.Ext(name)
 	base := strings.TrimSuffix(name, ext)
 	return fmt.Sprintf("%s_COPY_%d%s", base, number, ext)
-}
-
-func getInfo(file string) (*FileInfo, error) {
-	info, err := os.Stat(file)
-	if err != nil {
-		return nil, err
-	}
-	return &FileInfo{Name: info.Name(), Size: uint64(info.Size())}, nil
 }
 
 func readConn(r *bufio.Reader) (string, error) {
@@ -56,19 +45,8 @@ func writeConn(w *bufio.Writer, line string) error {
 	return w.Flush()
 }
 
-func makeDirAbs(dir string) (string, error) {
-	if !filepath.IsAbs(dir) {
-		abs, err := filepath.Abs(dir)
-		if err != nil {
-			return "", err
-		}
-		return abs, nil
-	}
-	return dir, nil
-}
-
 func Send(addr, dirToFile string) error {
-	dirToFile, err := makeDirAbs(dirToFile)
+	dirToFile, err := manifest.ToAbsDir(dirToFile)
 	if err != nil {
 		return err
 	}
@@ -88,11 +66,11 @@ func Send(addr, dirToFile string) error {
 	}
 
 	fmt.Println("connected")
-	info, err := getInfo(dirToFile)
+	m, err := manifest.Build(dirToFile)
 	if err != nil {
 		return err
 	}
-	jsonData, err := json.Marshal(info)
+	jsonData, err := json.Marshal(m)
 	if err != nil {
 		return err
 	}
@@ -138,7 +116,7 @@ func Send(addr, dirToFile string) error {
 }
 
 func Receive(addr, dirToFile string) error {
-	dirToFile, err := makeDirAbs(dirToFile)
+	dirToFile, err := manifest.ToAbsDir(dirToFile)
 	if err != nil {
 		return err
 	}
@@ -169,31 +147,31 @@ func Receive(addr, dirToFile string) error {
 	}
 
 	fmt.Println("connected")
-	info := FileInfo{}
+	m := &manifest.Manifest{}
 	jsonData, err := readConn(rw.Reader)
 	if err != nil {
 		writeConn(rw.Writer, msgFail)
 		return err
 	}
-	err = json.Unmarshal([]byte(jsonData), &info)
+	err = json.Unmarshal([]byte(jsonData), m)
 	if err != nil {
 		writeConn(rw.Writer, msgFail)
 		return err
 	}
-	if info.Size == uint64(0) || info.Name == "" {
+	if m.Name == "" {
 		return fmt.Errorf("empty data")
 	} else {
 		writeConn(rw.Writer, msgOk)
 	}
 	fileName := filepath.Base(dirToFile)
-	if info.Name != fileName {
-		fmt.Printf("choose which file to write, %q or %q ? [1/2]:", fileName, info.Name)
+	if m.Name != fileName {
+		fmt.Printf("choose which file to write, %q or %q ? [1/2]:", fileName, m.Name)
 		fmt.Scan(&answer)
 		num, _ := strconv.Atoi(answer)
 		switch num {
 		case 1:
 		case 2:
-			dirToFile, err = makeDirAbs(info.Name)
+			dirToFile, err = manifest.ToAbsDir(m.Name)
 			if err != nil {
 				return err
 			}
@@ -203,7 +181,7 @@ func Receive(addr, dirToFile string) error {
 		}
 	}
 
-	dir, err := makeDirAbs(".")
+	dir, err := manifest.ToAbsDir(".")
 	if err != nil {
 		return err
 	}
@@ -212,18 +190,18 @@ func Receive(addr, dirToFile string) error {
 		return err
 	}
 	copies := make([]string, 0)
-	ext := filepath.Ext(info.Name)
-	nameFile := strings.TrimSuffix(info.Name, ext)
+	ext := filepath.Ext(m.Name)
+	nameFile := strings.TrimSuffix(m.Name, ext)
 	for _, en := range entries {
 		if en.IsDir() {
 			continue
 		}
-		if strings.Contains(en.Name(), nameFile) && en.Name()[0] == info.Name[0] && filepath.Ext(nameFile) == filepath.Ext(en.Name()) {
+		if strings.Contains(en.Name(), nameFile) && en.Name()[0] == m.Name[0] && filepath.Ext(nameFile) == filepath.Ext(en.Name()) {
 			copies = append(copies, en.Name())
 		}
 	}
 	if len(copies) > 0 {
-		dirToFile, err = makeDirAbs(makeCopyFile(info.Name, len(copies)))
+		dirToFile, err = manifest.ToAbsDir(makeCopyFile(m.Name, len(copies)))
 		if err != nil {
 			return err
 		}
@@ -242,7 +220,7 @@ func Receive(addr, dirToFile string) error {
 		hash.Reset()
 		file.Truncate(0)
 		file.Seek(0, io.SeekStart)
-		if _, err := io.CopyN(io.MultiWriter(hash, file), conn, int64(info.Size)); err != nil {
+		if _, err := io.CopyN(io.MultiWriter(hash, file), conn, int64(m.Size)); err != nil {
 			return err
 		}
 		if req, _ := readConn(rw.Reader); req != msgCheckSum {
