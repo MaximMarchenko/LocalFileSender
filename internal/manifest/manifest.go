@@ -1,6 +1,7 @@
 package manifest
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 )
@@ -10,6 +11,41 @@ type Manifest struct {
 	Size    int64       `json:"size"`
 	IsDir   bool        `json:"isdir,omitempty"`
 	Entries []*Manifest `json:"entries,omitempty"`
+}
+
+func (m *Manifest) HasFiles() bool {
+	if m == nil {
+		return false
+	}
+	for _, en := range m.Entries {
+		if !en.IsDir {
+			return true
+		}
+	}
+	return false
+}
+
+func (m *Manifest) GetDirs(path string) ([]string, error) {
+	if m == nil {
+		return nil, fmt.Errorf("empty manifest")
+	}
+	var dirs []string
+	var hasDirs bool
+	for _, en := range m.Entries {
+		if !en.IsDir {
+			continue
+		}
+		hasDirs = true
+		d, err := en.GetDirs(filepath.Join(path, m.Name))
+		if err != nil {
+			return nil, err
+		}
+		dirs = append(dirs, d...)
+	}
+	if !hasDirs && m.IsDir {
+		dirs = append(dirs, filepath.Join(path, m.Name))
+	}
+	return dirs, nil
 }
 
 func ToAbsDir(dir string) (string, error) {
@@ -24,10 +60,6 @@ func ToAbsDir(dir string) (string, error) {
 }
 
 func Build(path string) (*Manifest, error) {
-	path, err := ToAbsDir(path)
-	if err != nil {
-		return nil, err
-	}
 	info, err := os.Stat(path)
 	if err != nil {
 		return nil, err
@@ -42,7 +74,7 @@ func Build(path string) (*Manifest, error) {
 			return nil, err
 		}
 		for _, en := range entries {
-			m, err := Build(filepath.Join(en.Name()))
+			m, err := Build(filepath.Join(path, en.Name()))
 			if err != nil {
 				return nil, err
 			}
