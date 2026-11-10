@@ -13,12 +13,32 @@ type Manifest struct {
 	Entries []*Manifest `json:"entries,omitempty"`
 }
 
+func (m *Manifest) CountFiles() int {
+	if m == nil {
+		return 0
+	}
+	if !m.IsDir {
+		return 1
+	}
+	n := 0
+	for _, en := range m.Entries {
+		n += en.CountFiles()
+	}
+	return n
+}
+
 func (m *Manifest) HasFiles() bool {
 	if m == nil {
 		return false
 	}
+	if !m.IsDir {
+		return true
+	}
 	for _, en := range m.Entries {
 		if !en.IsDir {
+			return true
+		}
+		if en.HasFiles() {
 			return true
 		}
 	}
